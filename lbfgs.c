@@ -70,8 +70,7 @@ licence.
 #include <stdlib.h>
 #include <math.h>
 
-#include <lbfgs.h>
-
+#include "lbfgs.h"
 #ifdef  _MSC_VER
 #define inline  __inline
 #endif/*_MSC_VER*/

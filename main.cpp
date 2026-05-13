@@ -9,6 +9,11 @@
 #include "stb_image_write.h"
 
 #include "lbfgs.h"
+#include "cmath"
+#include <random>
+
+static std::default_random_engine engine[32];
+static std::uniform_real_distribution<double> uniform(0.0, 1.0);
 
 double sqr(double x) { return x * x; };
 
@@ -193,6 +198,33 @@ public:
         //      For all other sites Pj (optionally, only k nearest neighbors) :
         //          Clip it with bisector of [Pi,Pj]
         //      (Lab 3, fluids) : also clip it by a disk of radius sqrt(w_i - w_air) centered at Pi
+
+
+        cells.resize(points.size());
+
+        
+
+        for (int i = 0; i < points.size(); ++i) {
+            
+            Polygon cell;
+
+            // I made the pushbacks here instead of the main function
+
+
+            cell.vertices.push_back(Vector(0, 0));
+            cell.vertices.push_back(Vector(1, 0));
+            cell.vertices.push_back(Vector(1, 1));
+            cell.vertices.push_back(Vector(0, 1));
+
+            // For every other site we will clip with the bisector
+            for (int j = 0; j < points.size(); ++j) {
+
+                if (i == j) continue; 
+                
+                cell = clip_by_bisector(cell, points[i], points[j], 0.0, 0.0);
+            }
+            cells[i] = cell;
+        }
     }
 
 
@@ -207,6 +239,7 @@ public:
         return result;
     }
 
+    
     static Polygon clip_by_bisector(const Polygon& V, const Vector& P0, const Vector& Pi, double w0, double wi) {
 
         // TODO Lab 1 (Voronoi) : in Lab 1, we assume w0 = w1 = 0
@@ -215,6 +248,69 @@ public:
         // TODO Lab 2 (Semi-Discrete Optimal Transport) : extend to Laguerre cells, i.e., w0 != w1
 
         Polygon result;
+
+        if (V.vertices.empty()) {
+            return result;
+
+        }
+
+        // M here would be the midpoint between the two points
+        Vector M = (P0 + Pi) * 0.5;
+        
+        // N would be the Normal pointing towards Pi 
+        Vector N = Pi - P0; 
+
+
+        // Now we'll loop over all the edges in the polygon
+
+        for (size_t j = 0; j < V.vertices.size(); j++) {
+
+            const Vector& A = V.vertices[j];
+
+            const Vector& B = V.vertices[(j + 1) % V.vertices.size()];
+
+            double dotA = dot(A - M, N);
+            double dotB = dot(B - M, N);
+
+            bool A_inside = (dotA <= 0);
+            bool B_inside = (dotB <= 0);
+
+            // We now compute the exact intersection point if the edge crosses the boundary
+
+            Vector intersection;
+
+            if (A_inside != B_inside) {
+               
+                double t = dotA / (dotA - dotB); 
+
+                intersection = A + (B - A) * t; 
+            }
+
+            // We apply the Sutherland-Hodgman logic for all the four cases
+
+            if (A_inside && B_inside) {
+                // If  A is inside and B is also inside then we add B
+
+                result.vertices.push_back(B);
+
+            } else if (A_inside && !B_inside) {
+                // If A is  inside, B is outside then we  Add M (Intersection)
+
+                result.vertices.push_back(intersection);
+
+            } else if (!A_inside && B_inside) {
+
+                result.vertices.push_back(intersection);
+                result.vertices.push_back(B);
+            } 
+            else {
+
+                // If A and B are both outside we do nothing
+
+
+            }
+        }
+
 
         return result;
     }
@@ -361,16 +457,26 @@ void save_svg(const std::vector<Polygon>& polygons, std::string filename, std::s
 
 int main() {
 
-    Polygon p;
-    p.vertices.push_back(Vector(0.1, 0.2));
-    p.vertices.push_back(Vector(0.6, 0.4));
-    p.vertices.push_back(Vector(0.5, 0.7));
-    p.vertices.push_back(Vector(0.2, 0.5));
+    VoronoiDiagram vor;
+    
+    int N_particles = 10000;
+    for(int i = 0; i < N_particles; i++) {
 
-    std::vector<Polygon> s;
-    s.push_back(p);
+        // We initialise the random points on the grid scale here
 
-    save_frame(s, "toto");
-    save_svg(s, "toto.svg");
+        double x = uniform(engine[0]);
+        double y = uniform(engine[0]);
+        vor.points.push_back(Vector(x, y));
+
+    }
+
+    vor.compute();
+
+    save_svg(vor.cells, "voronoi_output.svg", "lightblue");
+    save_frame(vor.cells, "test");
+
+
     return 0;
+
+    
 }
