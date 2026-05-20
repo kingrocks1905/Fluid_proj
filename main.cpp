@@ -64,9 +64,20 @@ public:
 
     double area() {
         if (vertices.size() < 3) return 0;
-        // TODO Lab 3
+        // TODO Lab 2
         // Compute the area of the polygon
-        return -111;
+
+        double area = 0.0;
+
+        for(size_t i = 0; i < vertices.size(); i++){
+
+            const Vector& vi = vertices[i];
+
+            const Vector& vj = vertices[(i+1)% vertices.size()];
+
+            area += vi[0] * vj[1] - vj[0] * vi[1];
+        }
+        return std::abs(area * 0.5);
     }
 
     Vector centroid() {
@@ -80,10 +91,35 @@ public:
     double integral_square_distance(const Vector& Pi) {
         if (vertices.size() < 3) return 0;
 
-        // TODO Lab 3
+        // TODO Lab 2
         // Compute the integral of ||x-Pi||^2 over the polygon
 
-        return -111;
+        double integral = 0;
+
+        // We will try to tringulate the polygon using Pi as pivot
+
+        for (size_t i = 0; i< vertices.size(); i++){
+
+            const Vector& vi = vertices[i];
+
+            const Vector& vj = vertices[(i+1)% vertices.size()];
+
+            Vector a = vi - Pi;
+            Vector b = vj- Pi;
+
+            // now we'll calculate the area of thsi triangle
+
+            double tri_area= std::abs(a[0]*b[1] - b[0]* a[1])* 0.5;
+
+            integral += (tri_area / 6.0) * (a.norm2() + dot(a,b)+ b.norm2());
+
+        
+
+        }
+
+
+
+        return integral;
     }
 
     std::vector<Vector> vertices;
@@ -202,6 +238,11 @@ public:
 
         cells.resize(points.size());
 
+        if (weights.size() != points.size()){
+
+            weights.resize(points.size(),0.0);
+        }
+
         
 
         for (int i = 0; i < points.size(); ++i) {
@@ -221,7 +262,7 @@ public:
 
                 if (i == j) continue; 
                 
-                cell = clip_by_bisector(cell, points[i], points[j], 0.0, 0.0);
+                cell = clip_by_bisector(cell, points[i], points[j], weights[i], weights[j]);
             }
             cells[i] = cell;
         }
@@ -256,9 +297,22 @@ public:
 
         // M here would be the midpoint between the two points
         Vector M = (P0 + Pi) * 0.5;
-        
+
         // N would be the Normal pointing towards Pi 
         Vector N = Pi - P0; 
+
+        double dist2 = N.norm2();
+
+        // I want to prevent division by 0 over here
+
+        if (dist2 < 1e-23131){
+            return V;
+        }
+
+        
+        // This would be the shifted midpoint for the power diagram
+        Vector M_shifted  = M + (w0-wi)/ (2.0 * dist2) * N; 
+        
 
 
         // Now we'll loop over all the edges in the polygon
@@ -269,8 +323,8 @@ public:
 
             const Vector& B = V.vertices[(j + 1) % V.vertices.size()];
 
-            double dotA = dot(A - M, N);
-            double dotB = dot(B - M, N);
+            double dotA = dot(A - M_shifted, N);
+            double dotB = dot(B - M_shifted, N);
 
             bool A_inside = (dotA <= 0);
             bool B_inside = (dotB <= 0);
@@ -357,8 +411,21 @@ static lbfgsfloatval_t evaluate(
     // Lab 3 (fluid) : adapt these functions to support partial optimal transport (now "n" has been increased by 1 to account for the air variable)
     
     lbfgsfloatval_t fx = 0.0;
-    // g[i] = ...
-    // fx = ...
+    double target_area = 1.0 / (double)n;
+
+    for (int i = 0; i < n; i++) {
+
+        double w_i = x[i];
+
+        double area_i = ot->vor.cells[i].area();
+
+        double integral_sq = ot->vor.cells[i].integral_square_distance(ot->vor.points[i]);
+        
+        g[i] = area_i - target_area;
+
+        fx += (w_i * area_i) - (w_i * target_area) - integral_sq;
+    }
+    
 
     return fx;
 }
@@ -400,7 +467,7 @@ void OptimalTransport::optimize() {
 // Lab 3 (fluids)
 class Fluid {
 public:
-    Fluid(int N_particles = 1000) : N_particles(N_particles) {
+    Fluid(int N_particles = 100) : N_particles(N_particles) {
     }
 
     // Lab 3 : advance the simulation dt in time
@@ -457,24 +524,46 @@ void save_svg(const std::vector<Polygon>& polygons, std::string filename, std::s
 
 int main() {
 
+    OptimalTransport o;
+
     VoronoiDiagram vor;
     
-    int N_particles = 10000;
+    int N_particles = 10;
+
+    
+    
     for(int i = 0; i < N_particles; i++) {
 
         // We initialise the random points on the grid scale here
 
         double x = uniform(engine[0]);
         double y = uniform(engine[0]);
-        vor.points.push_back(Vector(x, y));
+
+        o.vor.points.push_back(Vector(x, y));
+
+        o.vor.weights.push_back(0.0);
 
     }
 
     vor.compute();
 
-    save_svg(vor.cells, "voronoi_output.svg", "lightblue");
-    save_frame(vor.cells, "test");
+    
 
+    std::cout << "Computing initial standard Voronoi diagram" << std::endl;
+    o.vor.compute();
+    save_svg(o.vor.cells, "initial_voronoi.svg", "lightblue");
+    save_frame(o.vor.cells, "ot_frame", 0);
+
+    std::cout << "Starting Optimal Transport Optimization" << std::endl;
+    o.optimize();
+
+    std::cout << "Optimization finished. We will save the optimized diagram..." << std::endl;
+    save_svg(o.vor.cells, "optimized_power_diagram.svg", "lightgreen");
+    save_frame(o.vor.cells, "ot_frame", 1);
+
+    
+
+   
 
     return 0;
 
