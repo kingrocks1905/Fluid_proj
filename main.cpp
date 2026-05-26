@@ -85,7 +85,26 @@ public:
         // TODO Lab 3
         // Compute the centroid of the polygon
 
-        return Vector(-111,-111);
+        Vector c(0,0);
+
+        double a = 0.0;
+
+        for(size_t i = 0; i < vertices.size(); i++){
+
+            const Vector& vi = vertices[i];
+
+            const Vector& vj = vertices[(i + 1) % vertices.size()];
+
+            double cross = vi[0] * vj[1] - vj[0] * vi[1];
+
+            a = a+cross;
+
+            c = c + (vi + vj) * cross;
+
+        }
+
+        return c / (3.0 * a);
+    
     }
 
     double integral_square_distance(const Vector& Pi) {
@@ -238,12 +257,9 @@ public:
 
         cells.resize(points.size());
 
-        if (weights.size() != points.size()){
-
-            weights.resize(points.size(),0.0);
-        }
-
+       
         
+        double w_air = weights.back(); // We'll add the very last ray in the array to Air
 
         for (int i = 0; i < points.size(); ++i) {
             
@@ -264,6 +280,32 @@ public:
                 
                 cell = clip_by_bisector(cell, points[i], points[j], weights[i], weights[j]);
             }
+
+            //Now we'll clip against the air to form something like a free surface
+
+            if (weights[i]<= w_air){
+
+                // If this condition happens then our radius is imaginary
+                cell.vertices.clear();
+            }
+
+            else{
+                double radius = sqrt(weights[i]- w_air);
+
+                int number_sides = 32; // We'll have a 32 sided polygon to approximate
+
+                for (int k = 0;k< number_sides; k++){
+
+                    double theta1 = k* 2.0 *M_PI/ number_sides;
+                    double theta2 = (k+1)* 2.0 *M_PI/ number_sides;
+
+                    Vector u = points[i] + Vector(radius * cos(theta1), radius * sin(theta1));
+                    Vector v = points[i] +Vector(radius *cos(theta2), radius * sin(theta2));
+
+                    cell = clip_by_edge(cell,u,v);
+                }
+
+            }
             cells[i] = cell;
         }
     }
@@ -276,6 +318,51 @@ public:
         // Will be used to clip a polygon (a cell) by all the edges of a (discretized) disk
 
         Polygon result;
+
+        if (V.vertices.empty()) return result;
+
+        // Here the normal pointing to inside
+        Vector N(v[1] - u[1], u[0] - v[0]); 
+
+
+        for (size_t j = 0; j < V.vertices.size(); j++) {
+
+
+            const Vector& A = V.vertices[j];
+
+            const Vector& B = V.vertices[(j + 1) % V.vertices.size()];
+
+            double dotA = dot(A - u, N);
+
+            double dotB = dot(B - u, N);
+
+            bool A_inside = (dotA <= 0);
+            bool B_inside = (dotB <= 0);
+
+            if (A_inside != B_inside) {
+                double t = dotA / (dotA - dotB);
+                Vector intersection = A + (B - A) * t;
+
+                if (A_inside && !B_inside) {
+                    result.vertices.push_back(intersection);
+                } 
+                
+                else if (!A_inside && B_inside) {
+
+                    result.vertices.push_back(intersection);
+                    result.vertices.push_back(B);
+                }
+
+            } else if (A_inside && B_inside) {
+
+                result.vertices.push_back(B);
+            }
+        }
+
+    
+
+
+
 
         return result;
     }
@@ -388,6 +475,8 @@ public:
     void optimize();
 
     VoronoiDiagram vor;
+
+    double fluid_volume = 0.4;
 };
 
 
@@ -411,21 +500,37 @@ static lbfgsfloatval_t evaluate(
     // Lab 3 (fluid) : adapt these functions to support partial optimal transport (now "n" has been increased by 1 to account for the air variable)
     
     lbfgsfloatval_t fx = 0.0;
-    double target_area = 1.0 / (double)n;
 
-    for (int i = 0; i < n; i++) {
+    int N_particles = n-1; 
+
+    double target_fluid_area = ot->fluid_volume / N_particles;
+
+    double target_air_area = 1.0 - ot->fluid_volume;
+
+    double total_fluid_area = 0.0;
+
+    // Classic particle calculations to do here
+    for (int i = 0; i < N_particles; i++) {
 
         double w_i = x[i];
 
         double area_i = ot->vor.cells[i].area();
-
+        total_fluid_area += area_i;
+        
         double integral_sq = ot->vor.cells[i].integral_square_distance(ot->vor.points[i]);
         
-        g[i] = area_i - target_area;
-
-        fx += (w_i * area_i) - (w_i * target_area) - integral_sq;
+        g[i] = area_i - target_fluid_area;
+        fx += (w_i * area_i) - (w_i * target_fluid_area) - integral_sq;
     }
     
+    // Time for the air calculations 
+    double w_air = x[N_particles];
+
+    double area_air = 1.0 - total_fluid_area; 
+    
+    g[N_particles] = area_air - target_air_area;
+
+    fx += (w_air * area_air) - (w_air * target_air_area); 
 
     return fx;
 }
@@ -468,6 +573,23 @@ void OptimalTransport::optimize() {
 class Fluid {
 public:
     Fluid(int N_particles = 100) : N_particles(N_particles) {
+
+        ot.fluid_volume = 0.4;
+
+        // WW WE WILL intiialise particles in a hgih cluster. The idea is to make them fall
+
+        for(int i =0; i< N_particles; i++){
+
+            double r = 0.2 * sqrt(uniform(engine[0]));
+
+            double theta = 2.0 * M_PI * uniform(engine[0]);
+
+            particles.push_back(Vector(0.5 + r* cos(theta),0.8 + r* sin(theta)));
+            velocities.push_back(Vector(0,0));
+
+            ot.vor.weights.push_back(0.0);
+        }
+        ot.vor.weights.push_back(0.0);
     }
 
     // Lab 3 : advance the simulation dt in time
@@ -480,12 +602,73 @@ public:
         // TODO Lab 3 : 
         // Compute semi-discrete partial optimal transport
         // for all particles, add gravity and spring force towards cell centroid, integrate acceleration->velocity and velocity->position
+
+        // Ok first I will sync the particle positions  and optimize
+
+        ot.vor.points = particles;
+
+        ot.optimize();
+
+
+        // now we'll compute all the physics and integrate
+
+        for(int i = 0; i<N_particles; i++){
+            Vector centroid = ot.vor.cells[i].centroid();
+
+            // Now we'll apply the spring force to pull the partile to the center of the cell
+
+            Vector f_Spring(0,0);
+
+            if(ot.vor.cells[i].area() > 1e-10) {
+
+                f_Spring = (centroid -particles[i])/epsilon2;
+
+            }
+
+            Vector acceleration = g +f_Spring;
+
+            velocities[i] = velocities[i]  + acceleration *dt;
+            particles[i] = particles[i] + velocities[i]*dt;
+
+            // WEhave the basic floor and wall collision bounds here
+
+            if (particles[i][0]<0.0){
+                particles [i][0] = 0.0;
+
+                velocities[i][0] *= -0.5; 
+            }
+
+            if (particles[i][0]>1.0){
+                particles [i][0] = 1.0;
+
+                velocities[i][0] *= -0.5; 
+            }
+
+            if (particles[i][1]<0.0){
+                particles [i][1] = 0.0;
+
+                velocities[i][1] *= -0.5; 
+
+            }
+
+            if (particles[i][1]>1.0){
+                particles [i][1] = 1.0;
+
+                velocities[i][1] *= -0.5; 
+            }
+
+
+
+        }
+
+
+
     }
 
     // just run the full simulation
     void run_simulation() {
         double dt = 0.002;
-        for (int i = 0; i < 1000; i++) {
+        for (int i = 0; i < 100; i++) {
             time_step(dt);
             save_frame(ot.vor.cells, "test", i);
         }
@@ -524,48 +707,13 @@ void save_svg(const std::vector<Polygon>& polygons, std::string filename, std::s
 
 int main() {
 
-    OptimalTransport o;
+    Fluid sim(200);
 
-    VoronoiDiagram vor;
-    
-    int N_particles = 10;
+    std::cout<<"Starting fluid sim " << std::endl;
 
-    
-    
-    for(int i = 0; i < N_particles; i++) {
-
-        // We initialise the random points on the grid scale here
-
-        double x = uniform(engine[0]);
-        double y = uniform(engine[0]);
-
-        o.vor.points.push_back(Vector(x, y));
-
-        o.vor.weights.push_back(0.0);
-
-    }
-
-    vor.compute();
-
-    
-
-    std::cout << "Computing initial standard Voronoi diagram" << std::endl;
-    o.vor.compute();
-    save_svg(o.vor.cells, "initial_voronoi.svg", "lightblue");
-    save_frame(o.vor.cells, "ot_frame", 0);
-
-    std::cout << "Starting Optimal Transport Optimization" << std::endl;
-    o.optimize();
-
-    std::cout << "Optimization finished. We will save the optimized diagram..." << std::endl;
-    save_svg(o.vor.cells, "optimized_power_diagram.svg", "lightgreen");
-    save_frame(o.vor.cells, "ot_frame", 1);
-
-    
-
-   
+    sim.run_simulation();
+    std::cout<<"Simulation finished " << std::endl;
 
     return 0;
-
     
 }
